@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"sync/atomic"
 	"fmt"
+	"log"
+	"encoding/json"
 )
 
 func main() {
@@ -16,6 +18,7 @@ func main() {
 	serveMux.HandleFunc("GET /api/healthz", readinessEndpoints)
 	serveMux.HandleFunc("GET /admin/metrics", apiConfig_1.getNumHits)
 	serveMux.HandleFunc("POST /admin/reset", apiConfig_1.resetHits)
+	serveMux.HandleFunc("POST /api/validate_chirp", validateChirp)
 
 	server := &http.Server {
 		Handler: serveMux,
@@ -23,6 +26,73 @@ func main() {
 	}
 
 	server.ListenAndServe()
+}
+
+func validateChirp(w http.ResponseWriter, r *http.Request) {
+	type parameters struct {
+		Body string `json:"body"`
+	}
+
+	type validResponse struct {
+		Valid bool `json:"valid"`
+	}
+
+	type errorResponse struct {
+		Error string `json:"error"`
+	}
+
+	decoder := json.NewDecoder(r.Body)
+	params := parameters{}
+	err := decoder.Decode(&params)
+	if (err != nil) {
+		log.Printf("Error decoding request parameters", err)
+		res := errorResponse{
+			Error: "Something went wrong",
+		}
+		data, error := json.Marshal(res)
+		if (error != nil) {
+			log.Printf("Error marshaling json", error)
+			w.WriteHeader(500)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(500)
+		w.Write(data)
+		return
+	}
+
+	if (len(params.Body) > 140) {
+		res := errorResponse{
+			Error: "Chirp is too long",
+		}
+		data, err := json.Marshal(res)
+		if (err != nil) {
+			log.Printf("Error marshaling json")
+			w.WriteHeader(500)
+			return
+		}
+
+		log.Printf("Chirp is too long")
+		w.WriteHeader(400)
+		w.Write(data)
+		return
+	}
+
+	validRes := validResponse{
+		Valid: true,
+	}
+
+	data, err := json.Marshal(validRes)
+	if (err != nil) {
+		log.Printf("Error marshaling json")
+		w.WriteHeader(500)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	w.Write([]byte(data))
 }
 
 func readinessEndpoints(w http.ResponseWriter, r *http.Request) {
