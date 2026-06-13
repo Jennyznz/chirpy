@@ -13,9 +13,9 @@ func main() {
 	apiConfig_1 := &apiConfig{}
 	
 	serveMux.Handle("/app/", apiConfig_1.middlewareMetricsInc(strippedHandler))
-	serveMux.HandleFunc("GET /healthz", readinessEndpoints)
-	serveMux.HandleFunc("GET /metrics", apiConfig_1.getNumHits)
-	serveMux.HandleFunc("POST /reset", apiConfig_1.resetHits)
+	serveMux.HandleFunc("GET /api/healthz", readinessEndpoints)
+	serveMux.HandleFunc("GET /admin/metrics", apiConfig_1.getNumHits)
+	serveMux.HandleFunc("POST /admin/reset", apiConfig_1.resetHits)
 
 	server := &http.Server {
 		Handler: serveMux,
@@ -39,7 +39,15 @@ func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {	// 
 }
 
 func (cfg *apiConfig) getNumHits(w http.ResponseWriter, r *http.Request) {	// http.ServeMux needs every handler to accept a http writer and reader, even if not used
-	result := fmt.Sprintf("Hits: %d", cfg.fileserverHits.Load())
+	result := fmt.Sprintf(`
+		<html>
+			<body>
+				<h1>Welcome, Chirpy Admin</h1>
+				<p>Chirpy has been visited %d times!</p>
+			</body>
+		</html>
+	`, cfg.fileserverHits.Load())
+	w.Header().Add("Content-Type", "text/html") // Must go before .Write()
 	w.Write([]byte(result))
 }
 
