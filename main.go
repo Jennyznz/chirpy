@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"encoding/json"
+	"strings"
 )
 
 func main() {
@@ -34,7 +35,7 @@ func validateChirp(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type validResponse struct {
-		Valid bool `json:"valid"`
+		Body string `json:"cleaned_body"`
 	}
 
 	type errorResponse struct {
@@ -79,8 +80,30 @@ func validateChirp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	words := strings.Split(params.Body, " ")
+	profane := []string{"kerfuffle", "sharbert", "fornax"}
+	var cleanedWords []string
+
+	for _, word := range words {
+		lcWord := strings.ToLower(word)
+		isProfane := false
+		for _, p := range profane {
+			if (lcWord == p) {
+				cleanedWords = append(cleanedWords, "****")
+				isProfane = true
+				break
+			}
+		}
+
+		if (!isProfane) {
+			cleanedWords = append(cleanedWords, word)
+		}
+	}
+
+	cleanedBody := strings.Join(cleanedWords, " ")
+
 	validRes := validResponse{
-		Valid: true,
+		Body: cleanedBody,
 	}
 
 	data, err := json.Marshal(validRes)
