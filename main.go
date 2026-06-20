@@ -19,6 +19,7 @@ import (
 
 func main() {
 	godotenv.Load()
+	platform := os.Getenv("PLATFORM")
 	dbURL := os.Getenv("DB_URL")
 	db, err := sql.Open("postgres", dbURL)
 	if (err != nil) {
@@ -29,17 +30,19 @@ func main() {
 	serveMux := http.NewServeMux()
 	fullDir := http.Dir(".")
 	strippedHandler := http.StripPrefix("/app", http.FileServer(fullDir))
+
 	apiConfig_1 := &apiConfig{
 		fileserverHits: atomic.Int32{},
 		db: dbQueries,
+		platform: platform,
 	}
 	
 	serveMux.Handle("/app/", apiConfig_1.middlewareMetricsInc(strippedHandler))
 	serveMux.HandleFunc("GET /api/healthz", readinessEndpoints)
 	serveMux.HandleFunc("GET /admin/metrics", apiConfig_1.getNumHits)
-	serveMux.HandleFunc("POST /admin/reset", apiConfig_1.resetHits)
 	serveMux.HandleFunc("POST /api/validate_chirp", validateChirp)
 	serveMux.HandleFunc("POST /api/users", apiConfig_1.createUser)	// createUser will need access to the existing db, and other config info
+	serveMux.HandleFunc("POST /admin/reset", apiConfig_1.reset)
 
 	server := &http.Server {
 		Handler: serveMux,
@@ -47,6 +50,26 @@ func main() {
 	}
 
 	server.ListenAndServe()
+}
+
+func (cfg *apiConfig) reset(w http.ResponseWriter, r *http.Request) {
+	// Return with error if not in dev mode
+	if (cfg.platform != "dev") {
+		log.Printf("Must be in dev mode to reset users")
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	// Reset hits counter
+	cfg.fileserverHits.Store(0); 
+	// Reset users
+	cfg.db.ResetUsers(r.Context())
+
+	// Response
+	w.Header().Set("Content-Type", "text/plain")
+	w.WriteHeader(http.StatusOK)
+	return
 }
 
 
@@ -100,7 +123,7 @@ func (cfg *apiConfig) createUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Map new user information with User struct for the JSON tags
+	// Map new user information onto User struct to control JSON keys
 	user := User{
 		ID: newUser.ID,
 		CreatedAt: newUser.CreatedAt,
@@ -248,13 +271,10 @@ func (cfg *apiConfig) getNumHits(w http.ResponseWriter, r *http.Request) {	// ht
 	w.Write([]byte(result))
 }
 
-func(cfg *apiConfig) resetHits(w http.ResponseWriter, r *http.Request) { 
-	cfg.fileserverHits.Store(0); 
-}
-
 type apiConfig struct {
 	fileserverHits atomic.Int32	// stdlib that safety increments and reads ints across goroutines
 	db *database.Queries
+	platform string
 }
 
 type User struct {
