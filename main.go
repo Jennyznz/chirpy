@@ -1,5 +1,7 @@
 package main
 
+import _ "github.com/lib/pq"
+
 import (
 	"net/http"
 	"sync/atomic"
@@ -7,13 +9,28 @@ import (
 	"log"
 	"encoding/json"
 	"strings"
+	"os"
+	"database/sql"
+	"github.com/Jennyznz/chirpy.git/internal/database"
+	"github.com/joho/godotenv"
 )
 
 func main() {
+	godotenv.Load()
+	dbURL := os.Getenv("DB_URL")
+	db, err := sql.Open("postgres", dbURL)
+	if (err != nil) {
+		log.Printf("Error loading database", err)
+	}
+	dbQueries := database.New(db)
+
 	serveMux := http.NewServeMux()
 	fullDir := http.Dir(".")
 	strippedHandler := http.StripPrefix("/app", http.FileServer(fullDir))
-	apiConfig_1 := &apiConfig{}
+	apiConfig_1 := &apiConfig{
+		fileserverHits: atomic.Int32{},
+		db: dbQueries,
+	}
 	
 	serveMux.Handle("/app/", apiConfig_1.middlewareMetricsInc(strippedHandler))
 	serveMux.HandleFunc("GET /api/healthz", readinessEndpoints)
@@ -150,6 +167,7 @@ func(cfg *apiConfig) resetHits(w http.ResponseWriter, r *http.Request) {
 
 type apiConfig struct {
 	fileserverHits atomic.Int32	// stdlib that safety increments and reads ints across goroutines
+	db *database.Queries
 }
 
 
