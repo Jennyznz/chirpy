@@ -13,6 +13,8 @@ import (
 	"database/sql"
 	"github.com/Jennyznz/chirpy.git/internal/database"
 	"github.com/joho/godotenv"
+	"github.com/google/uuid"
+	"time"
 )
 
 func main() {
@@ -37,6 +39,7 @@ func main() {
 	serveMux.HandleFunc("GET /admin/metrics", apiConfig_1.getNumHits)
 	serveMux.HandleFunc("POST /admin/reset", apiConfig_1.resetHits)
 	serveMux.HandleFunc("POST /api/validate_chirp", validateChirp)
+	serveMux.HandleFunc("POST /api/users", apiConfig_1.createUser)	// createUser will need access to the existing db, and other config info
 
 	server := &http.Server {
 		Handler: serveMux,
@@ -44,6 +47,90 @@ func main() {
 	}
 
 	server.ListenAndServe()
+}
+
+
+func (cfg *apiConfig) createUser(w http.ResponseWriter, r *http.Request) {
+	type parameters struct {
+		Email string `json:"email"`	// json.Decoder can only populated exported struct fields. Lowercased fields are left as empty strings
+	}
+
+	type errorResponse struct {
+		Error string `json:"error"`
+	}
+
+	// Decode the email that arrives inside the request body
+	decoder := json.NewDecoder(r.Body)
+	params := parameters{}
+	err := decoder.Decode(&params)
+	if (err != nil) {
+		log.Printf("Invalid request body", err)
+		res := errorResponse{
+			Error: "Something went wrong",
+		}
+		data, errMsg := json.Marshal(res)
+		if (errMsg != nil) {
+			log.Printf("Error marshaling json", errMsg)
+			w.WriteHeader(500)
+			return
+		} 
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(400)
+		w.Write(data)
+		return
+	}
+
+
+	// Create a new user
+	newUser, err := cfg.db.CreateUser(r.Context(), params.Email)
+	if (err != nil) {
+		log.Printf("Error creating new user", err)
+		res := errorResponse{
+			Error: "Something went wrong",
+		}
+		data, errMsg := json.Marshal(res)
+		if (errMsg != nil) {
+			log.Printf("Error marshaling json", errMsg)
+			w.WriteHeader(500)
+			return
+		} 
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(500)
+		w.Write(data)
+		return
+	}
+
+	// Map new user information with User struct for the JSON tags
+	user := User{
+		ID: newUser.ID,
+		CreatedAt: newUser.CreatedAt,
+		UpdatedAt: newUser.UpdatedAt,
+		Email: newUser.Email,
+	}
+
+	// Encode user information as JSON in response
+	userJSON, err := json.Marshal(user)
+	if (err != nil) {
+		log.Printf("Error encoding JSON in response", err)
+		res := errorResponse{
+			Error: "Something went wrong",
+		}
+		data, errMsg := json.Marshal(res)
+		if (errMsg != nil) {
+			log.Printf("Error marshaling json", errMsg)
+			w.WriteHeader(500)
+			return
+		} 
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(500)
+		w.Write(data)
+		return
+	}
+
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	w.Write(userJSON)
 }
 
 func validateChirp(w http.ResponseWriter, r *http.Request) {
@@ -67,9 +154,9 @@ func validateChirp(w http.ResponseWriter, r *http.Request) {
 		res := errorResponse{
 			Error: "Something went wrong",
 		}
-		data, error := json.Marshal(res)
-		if (error != nil) {
-			log.Printf("Error marshaling json", error)
+		data, errMsg := json.Marshal(res)
+		if (errMsg != nil) {
+			log.Printf("Error marshaling json", errMsg)
 			w.WriteHeader(500)
 			return
 		}
@@ -168,6 +255,13 @@ func(cfg *apiConfig) resetHits(w http.ResponseWriter, r *http.Request) {
 type apiConfig struct {
 	fileserverHits atomic.Int32	// stdlib that safety increments and reads ints across goroutines
 	db *database.Queries
+}
+
+type User struct {
+	ID uuid.UUID `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Email     string    `json:"email"`
 }
 
 
