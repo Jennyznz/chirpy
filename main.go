@@ -40,9 +40,9 @@ func main() {
 	serveMux.Handle("/app/", apiConfig_1.middlewareMetricsInc(strippedHandler))
 	serveMux.HandleFunc("GET /api/healthz", readinessEndpoints)
 	serveMux.HandleFunc("GET /admin/metrics", apiConfig_1.getNumHits)
-	serveMux.HandleFunc("POST /api/validate_chirp", validateChirp)
 	serveMux.HandleFunc("POST /api/users", apiConfig_1.createUser)	// createUser will need access to the existing db, and other config info
 	serveMux.HandleFunc("POST /admin/reset", apiConfig_1.reset)
+	serveMux.HandleFunc("POST /api/chirps", apiConfig_1.createChirp)
 
 	server := &http.Server {
 		Handler: serveMux,
@@ -50,6 +50,122 @@ func main() {
 	}
 
 	server.ListenAndServe()
+}
+
+func (cfg *apiConfig) createChirp(w http.ResponseWriter, r *http.Request) {
+	type parameters struct {
+		Body string `json:"body"`
+		UserID uuid.UUID `json:"user_id"`
+	}
+
+	type errorResponse struct {
+		Error string `json:"error"`
+	}
+
+	// Decode request body
+	decoder := json.NewDecoder(r.Body)
+	params := parameters{}
+	err := decoder.Decode(&params)
+	if (err != nil) {
+		log.Printf("Invalid request body", err)
+		res := errorResponse{
+			Error: "Something went wrong",
+		}
+		data, errMsg := json.Marshal(res)
+		if (errMsg != nil) {
+			log.Printf("Error marshaling json", errMsg)
+			w.WriteHeader(500)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(500)
+		w.Write(data)
+		return
+	}
+
+	// Check that chirp body is under 140 characters
+	if (len(params.Body) > 140) {
+		res := errorResponse{
+			Error: "Chirp is too long",
+		}
+		data, err := json.Marshal(res)
+		if (err != nil) {
+			log.Printf("Error marshaling json")
+			w.WriteHeader(500)
+			return
+		}
+
+		log.Printf("Chirp is too long")
+		w.WriteHeader(400)
+		w.Write(data)
+		return
+	}
+
+	// Censor profane words in chirp body
+	words := strings.Split(params.Body, " ")
+	profane := []string{"kerfuffle", "sharbert", "fornax"}
+	var cleanedWords []string
+
+	for _, word := range words {
+		lcWord := strings.ToLower(word)
+		isProfane := false
+		for _, p := range profane {
+			if (lcWord == p) {
+				cleanedWords = append(cleanedWords, "****")
+				isProfane = true
+				break
+			}
+		}
+
+		if (!isProfane) {
+			cleanedWords = append(cleanedWords, word)
+		}
+	}
+
+	cleanedBody := strings.Join(cleanedWords, " ")
+
+	// Create a new chirp
+	newChirp, err := cfg.db.CreateChirp(r.Context(), database.CreateChirpParams{
+		Body: cleanedBody,
+		UserID: params.UserID,
+	})
+	if (err != nil) {
+		log.Printf("Error creating new chirp", err)
+		res := errorResponse{
+			Error: "Something went wrong",
+		}
+		data, errMsg := json.Marshal(res)
+		if (errMsg != nil) {
+			log.Printf("Error marshaling json", errMsg)
+			w.WriteHeader(500)
+			return
+		} 
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(500)
+		w.Write(data)
+		return
+	}
+
+	chirp := Chirp{
+		ID: newChirp.ID,		
+		CreatedAt: newChirp.CreatedAt,
+		UpdatedAt: newChirp.UpdatedAt,
+		Body: newChirp.Body,
+		UserID: newChirp.UserID,	// snakecase converted to pascal case in the Go code produced by sqlc
+	}
+
+	chirpJSON, err := json.Marshal(chirp)
+	if (err != nil) {
+		log.Printf("Error marshaling json")
+		w.WriteHeader(500)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated) // 201
+	w.Write(chirpJSON)
+
 }
 
 func (cfg *apiConfig) reset(w http.ResponseWriter, r *http.Request) {
@@ -156,95 +272,6 @@ func (cfg *apiConfig) createUser(w http.ResponseWriter, r *http.Request) {
 	w.Write(userJSON)
 }
 
-func validateChirp(w http.ResponseWriter, r *http.Request) {
-	type parameters struct {
-		Body string `json:"body"`
-	}
-
-	type validResponse struct {
-		Body string `json:"cleaned_body"`
-	}
-
-	type errorResponse struct {
-		Error string `json:"error"`
-	}
-
-	decoder := json.NewDecoder(r.Body)
-	params := parameters{}
-	err := decoder.Decode(&params)
-	if (err != nil) {
-		log.Printf("Error decoding request parameters", err)
-		res := errorResponse{
-			Error: "Something went wrong",
-		}
-		data, errMsg := json.Marshal(res)
-		if (errMsg != nil) {
-			log.Printf("Error marshaling json", errMsg)
-			w.WriteHeader(500)
-			return
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(500)
-		w.Write(data)
-		return
-	}
-
-	if (len(params.Body) > 140) {
-		res := errorResponse{
-			Error: "Chirp is too long",
-		}
-		data, err := json.Marshal(res)
-		if (err != nil) {
-			log.Printf("Error marshaling json")
-			w.WriteHeader(500)
-			return
-		}
-
-		log.Printf("Chirp is too long")
-		w.WriteHeader(400)
-		w.Write(data)
-		return
-	}
-
-	words := strings.Split(params.Body, " ")
-	profane := []string{"kerfuffle", "sharbert", "fornax"}
-	var cleanedWords []string
-
-	for _, word := range words {
-		lcWord := strings.ToLower(word)
-		isProfane := false
-		for _, p := range profane {
-			if (lcWord == p) {
-				cleanedWords = append(cleanedWords, "****")
-				isProfane = true
-				break
-			}
-		}
-
-		if (!isProfane) {
-			cleanedWords = append(cleanedWords, word)
-		}
-	}
-
-	cleanedBody := strings.Join(cleanedWords, " ")
-
-	validRes := validResponse{
-		Body: cleanedBody,
-	}
-
-	data, err := json.Marshal(validRes)
-	if (err != nil) {
-		log.Printf("Error marshaling json")
-		w.WriteHeader(500)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(200)
-	w.Write([]byte(data))
-}
-
 func readinessEndpoints(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
@@ -282,6 +309,14 @@ type User struct {
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 	Email     string    `json:"email"`
+}
+
+type Chirp struct {
+	ID uuid.UUID `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Body string `json:"body"`
+	UserID uuid.UUID `json:"user_id"`
 }
 
 
