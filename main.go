@@ -43,6 +43,7 @@ func main() {
 	serveMux.HandleFunc("POST /api/users", apiConfig_1.createUser)	// createUser will need access to the existing db, and other config info
 	serveMux.HandleFunc("POST /admin/reset", apiConfig_1.reset)
 	serveMux.HandleFunc("POST /api/chirps", apiConfig_1.createChirp)
+	serveMux.HandleFunc("GET /api/chirps", apiConfig_1.getAllChirps)
 
 	server := &http.Server {
 		Handler: serveMux,
@@ -50,6 +51,27 @@ func main() {
 	}
 
 	server.ListenAndServe()
+}
+
+func (cfg *apiConfig) getAllChirps(w http.ResponseWriter, r *http.Request) {
+	// Retrieve data from chirps table
+	chirps, err := cfg.db.GetChirps(r.Context())
+	if (err != nil) {
+		log.Printf("Error creating chirp: %v", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	chirpsJSON, err := json.Marshal(chirps)
+	if (err != nil) {
+		log.Printf("Error marshaling JSON: %v", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write(chirpsJSON)
 }
 
 func (cfg *apiConfig) createChirp(w http.ResponseWriter, r *http.Request) {
@@ -131,7 +153,7 @@ func (cfg *apiConfig) createChirp(w http.ResponseWriter, r *http.Request) {
 		UserID: params.UserID,
 	})
 	if (err != nil) {
-		log.Printf("Error creating new chirp", err)
+		log.Printf("Error creating new chirp: %v", err)
 		res := errorResponse{
 			Error: "Something went wrong",
 		}
