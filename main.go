@@ -44,6 +44,7 @@ func main() {
 	serveMux.HandleFunc("POST /admin/reset", apiConfig_1.reset)
 	serveMux.HandleFunc("POST /api/chirps", apiConfig_1.createChirp)
 	serveMux.HandleFunc("GET /api/chirps", apiConfig_1.getAllChirps)
+	serveMux.HandleFunc("GET /api/chirps/{chirpID}", apiConfig_1.getChirp)
 
 	server := &http.Server {
 		Handler: serveMux,
@@ -53,13 +54,65 @@ func main() {
 	server.ListenAndServe()
 }
 
-func (cfg *apiConfig) getAllChirps(w http.ResponseWriter, r *http.Request) {
-	// Retrieve data from chirps table
-	chirps, err := cfg.db.GetChirps(r.Context())
+func (cfg *apiConfig) getChirp(w http.ResponseWriter, r *http.Request) {
+	// Get ID of chirp
+	chirpIDString := r.PathValue("chirpID")
+	chirpID, err := uuid.Parse(chirpIDString)
 	if (err != nil) {
-		log.Printf("Error creating chirp: %v", err)
+		log.Printf("Invalid chirp id path: %v", err)
+		w.WriteHeader(http.StatusBadRequest)	// (400) Client provided an invalid UUID string
+		return
+	}
+	
+	// Get chirp
+	dbChirp, err := cfg.db.GetChirp(r.Context(), chirpID)
+	if (err != nil) {
+		log.Printf("Error fetching chirp: %v", err)
+		w.WriteHeader(http.StatusNotFound)	// (404) Client provided a correct UUID, but it was not found in the existing database
+		return
+	}
+
+	// Map onto chirp struct to control json key names
+	chirp := Chirp{
+		ID: dbChirp.ID,
+		CreatedAt: dbChirp.CreatedAt,
+		UpdatedAt: dbChirp.UpdatedAt,
+		Body: dbChirp.Body,
+		UserID: dbChirp.UserID,
+	}
+
+	chirpJSON, err := json.Marshal(chirp)
+	if (err != nil) {
+		log.Printf("Error marshaling JSON: %v", err)
 		w.WriteHeader(500)
 		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write(chirpJSON)
+	return
+}
+
+func (cfg *apiConfig) getAllChirps(w http.ResponseWriter, r *http.Request) {
+	// Retrieve data from chirps table
+	dbChirps, err := cfg.db.GetAllChirps(r.Context())
+	if (err != nil) {
+		log.Printf("Error fetching chirps: %v", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	chirps := []Chirp{}
+
+	for _, dbChirp := range dbChirps {
+		chirps = append(chirps, Chirp {
+			ID: dbChirp.ID,
+			CreatedAt: dbChirp.CreatedAt,
+			UpdatedAt: dbChirp.UpdatedAt,
+			Body: dbChirp.Body,
+			UserID: dbChirp.UserID,
+		})
 	}
 
 	chirpsJSON, err := json.Marshal(chirps)
