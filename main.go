@@ -15,6 +15,8 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/google/uuid"
 	"time"
+	"github.com/Jennyznz/chirpy.git/internal/auth"
+
 )
 
 func main() {
@@ -45,6 +47,7 @@ func main() {
 	serveMux.HandleFunc("POST /api/chirps", apiConfig_1.createChirp)
 	serveMux.HandleFunc("GET /api/chirps", apiConfig_1.getAllChirps)
 	serveMux.HandleFunc("GET /api/chirps/{chirpID}", apiConfig_1.getChirp)
+	serveMux.HandleFunc("POST /api/login", apiConfig_1.login)
 
 	server := &http.Server {
 		Handler: serveMux,
@@ -52,6 +55,67 @@ func main() {
 	}
 
 	server.ListenAndServe()
+}
+
+func (cfg *apiConfig) login(w http.ResponseWriter, r *http.Request) {
+	type parameters struct {
+		Email string `json:"email"`
+		Password string `json:"password"`
+	}
+
+	// Decode request body
+	decoder := json.NewDecoder(r.Body)
+	params := parameters{}
+	err := decoder.Decode(&params)
+	if (err != nil) {
+		log.Printf("Invalid request body", err)
+		w.WriteHeader(500)
+		return
+		}
+
+	userInfo, err := cfg.db.Login(r.Context(), params.Email)
+	if (err != nil) {
+		log.Printf("No user found for email: %v", err)
+		w.WriteHeader(http.StatusUnauthorized)	// (401)
+		return
+	}
+	
+	pwMatch, err := auth.CheckPasswordHash(params.Password, userInfo.HashedPassword)
+	if (err != nil) {
+		log.Printf("Error: comparing passwords %v", err)
+		w.WriteHeader(500)	
+		return
+	}
+	if (!pwMatch) {
+		log.Printf("Incorrect Password: %v", err)
+		w.WriteHeader(http.StatusUnauthorized)	// (401)
+		return
+	}
+
+	type res struct{
+		ID uuid.UUID `json:"id"`
+		CreatedAt time.Time `json:"created_at"`
+		UpdatedAt time.Time `json:"updated_at"`
+		Email     string    `json:"email"`
+	}
+
+	response := res{
+		ID: userInfo.ID,		
+		CreatedAt: userInfo.CreatedAt,
+		UpdatedAt: userInfo.UpdatedAt,
+		Email: userInfo.Email,
+	}
+
+	responseJSON, err := json.Marshal(response)
+	if (err != nil) {
+		log.Printf("Error marshaling json")
+		w.WriteHeader(500)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK) // 200
+	w.Write(responseJSON)
 }
 
 func (cfg *apiConfig) getChirp(w http.ResponseWriter, r *http.Request) {
@@ -267,6 +331,7 @@ func (cfg *apiConfig) reset(w http.ResponseWriter, r *http.Request) {
 func (cfg *apiConfig) createUser(w http.ResponseWriter, r *http.Request) {
 	type parameters struct {
 		Email string `json:"email"`	// json.Decoder can only populated exported struct fields. Lowercased fields are left as empty strings
+		Password string `json: password`
 	}
 
 	type errorResponse struct {
@@ -294,9 +359,18 @@ func (cfg *apiConfig) createUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	hash, err := auth.HashPassword(params.Password)
+	if (err != nil) {
+		log.Printf("Error hashing password %v", err)
+		w.WriteHeader(500)	
+		return
+	}
 
 	// Create a new user
-	newUser, err := cfg.db.CreateUser(r.Context(), params.Email)
+	newUser, err := cfg.db.CreateUser(r.Context(), database.CreateUserParams{
+		Email: params.Email,
+		HashedPassword: hash,
+	})
 	if (err != nil) {
 		log.Printf("Error creating new user", err)
 		res := errorResponse{
@@ -384,6 +458,7 @@ type User struct {
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 	Email     string    `json:"email"`
+	HashedPassword string `json: "password"`
 }
 
 type Chirp struct {

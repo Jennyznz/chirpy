@@ -10,3 +10,7 @@ RETURNING *;
 
 -- name: ResetUsers :exec
 DELETE FROM users;
+
+-- name: Login :one
+SELECT * FROM users
+WHERE email = $1
