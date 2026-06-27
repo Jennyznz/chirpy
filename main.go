@@ -16,7 +16,6 @@ import (
 	"github.com/google/uuid"
 	"time"
 	"github.com/Jennyznz/chirpy.git/internal/auth"
-
 )
 
 func main() {
@@ -25,7 +24,7 @@ func main() {
 	dbURL := os.Getenv("DB_URL")
 	db, err := sql.Open("postgres", dbURL)
 	if (err != nil) {
-		log.Printf("Error loading database", err)
+		log.Printf("Error loading database: %s", err)
 	}
 	dbQueries := database.New(db)
 
@@ -37,6 +36,7 @@ func main() {
 		fileserverHits: atomic.Int32{},
 		db: dbQueries,
 		platform: platform,
+		jwtSecret: os.Getenv("JWT_SECRET"),
 	}
 	
 	serveMux.Handle("/app/", apiConfig_1.middlewareMetricsInc(strippedHandler))
@@ -61,6 +61,7 @@ func (cfg *apiConfig) login(w http.ResponseWriter, r *http.Request) {
 	type parameters struct {
 		Email string `json:"email"`
 		Password string `json:"password"`
+		ExpiresInSeconds int `json:"expires_in_seconds"`
 	}
 
 	// Decode request body
@@ -68,10 +69,10 @@ func (cfg *apiConfig) login(w http.ResponseWriter, r *http.Request) {
 	params := parameters{}
 	err := decoder.Decode(&params)
 	if (err != nil) {
-		log.Printf("Invalid request body", err)
+		log.Printf("Invalid request body: %s", err)
 		w.WriteHeader(500)
 		return
-		}
+	}
 
 	userInfo, err := cfg.db.Login(r.Context(), params.Email)
 	if (err != nil) {
@@ -92,18 +93,31 @@ func (cfg *apiConfig) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// If expires_in_seconds not providers or greater than one hour, set to one hour
+	if (params.ExpiresInSeconds <= 0 || params.ExpiresInSeconds > 3600) {
+		params.ExpiresInSeconds = 3600
+	}
+
 	type res struct{
 		ID uuid.UUID `json:"id"`
 		CreatedAt time.Time `json:"created_at"`
 		UpdatedAt time.Time `json:"updated_at"`
 		Email     string    `json:"email"`
+		Token string `json:"token"`
 	}
 
+	token, err := auth.MakeJWT(userInfo.ID, cfg.jwtSecret, time.Duration(params.ExpiresInSeconds) * time.Second)
+	if (err != nil) {
+		log.Printf("Error creating JWT token")
+		w.WriteHeader(500)
+	}
+		
 	response := res{
 		ID: userInfo.ID,		
 		CreatedAt: userInfo.CreatedAt,
 		UpdatedAt: userInfo.UpdatedAt,
 		Email: userInfo.Email,
+		Token: token,
 	}
 
 	responseJSON, err := json.Marshal(response)
@@ -201,18 +215,35 @@ func (cfg *apiConfig) createChirp(w http.ResponseWriter, r *http.Request) {
 		Error string `json:"error"`
 	}
 
+	// Get bearer token from request header
+	headers := r.Header
+	tokenString, err := auth.GetBearerToken(headers)
+	if (err != nil) {
+		log.Printf("Error getting token string: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	// Check if token string is valid
+	userID, err := auth.ValidateJWT(tokenString, cfg.jwtSecret)
+	if (err != nil) {
+		log.Printf("Error validating JWT: %s", err)
+		w.WriteHeader(http.StatusUnauthorized) // (401)
+		return
+	}
+
 	// Decode request body
 	decoder := json.NewDecoder(r.Body)
 	params := parameters{}
-	err := decoder.Decode(&params)
+	err = decoder.Decode(&params)
 	if (err != nil) {
-		log.Printf("Invalid request body", err)
+		log.Printf("Invalid request body: %s", err)
 		res := errorResponse{
 			Error: "Something went wrong",
 		}
 		data, errMsg := json.Marshal(res)
 		if (errMsg != nil) {
-			log.Printf("Error marshaling json", errMsg)
+			log.Printf("Error marshaling json: %s", errMsg)
 			w.WriteHeader(500)
 			return
 		}
@@ -267,7 +298,7 @@ func (cfg *apiConfig) createChirp(w http.ResponseWriter, r *http.Request) {
 	// Create a new chirp
 	newChirp, err := cfg.db.CreateChirp(r.Context(), database.CreateChirpParams{
 		Body: cleanedBody,
-		UserID: params.UserID,
+		UserID: userID,
 	})
 	if (err != nil) {
 		log.Printf("Error creating new chirp: %v", err)
@@ -276,7 +307,7 @@ func (cfg *apiConfig) createChirp(w http.ResponseWriter, r *http.Request) {
 		}
 		data, errMsg := json.Marshal(res)
 		if (errMsg != nil) {
-			log.Printf("Error marshaling json", errMsg)
+			log.Printf("Error marshaling json: %s", errMsg)
 			w.WriteHeader(500)
 			return
 		} 
@@ -343,13 +374,13 @@ func (cfg *apiConfig) createUser(w http.ResponseWriter, r *http.Request) {
 	params := parameters{}
 	err := decoder.Decode(&params)
 	if (err != nil) {
-		log.Printf("Invalid request body", err)
+		log.Printf("Invalid request body: %s", err)
 		res := errorResponse{
 			Error: "Something went wrong",
 		}
 		data, errMsg := json.Marshal(res)
 		if (errMsg != nil) {
-			log.Printf("Error marshaling json", errMsg)
+			log.Printf("Error marshaling json: %s", errMsg)
 			w.WriteHeader(500)
 			return
 		} 
@@ -372,13 +403,13 @@ func (cfg *apiConfig) createUser(w http.ResponseWriter, r *http.Request) {
 		HashedPassword: hash,
 	})
 	if (err != nil) {
-		log.Printf("Error creating new user", err)
+		log.Printf("Error creating new user: %s", err)
 		res := errorResponse{
 			Error: "Something went wrong",
 		}
 		data, errMsg := json.Marshal(res)
 		if (errMsg != nil) {
-			log.Printf("Error marshaling json", errMsg)
+			log.Printf("Error marshaling json: %s", errMsg)
 			w.WriteHeader(500)
 			return
 		} 
@@ -399,13 +430,13 @@ func (cfg *apiConfig) createUser(w http.ResponseWriter, r *http.Request) {
 	// Encode user information as JSON in response
 	userJSON, err := json.Marshal(user)
 	if (err != nil) {
-		log.Printf("Error encoding JSON in response", err)
+		log.Printf("Error encoding JSON in response: %s", err)
 		res := errorResponse{
 			Error: "Something went wrong",
 		}
 		data, errMsg := json.Marshal(res)
 		if (errMsg != nil) {
-			log.Printf("Error marshaling json", errMsg)
+			log.Printf("Error marshaling json: %s", errMsg)
 			w.WriteHeader(500)
 			return
 		} 
@@ -451,6 +482,7 @@ type apiConfig struct {
 	fileserverHits atomic.Int32	// stdlib that safety increments and reads ints across goroutines
 	db *database.Queries
 	platform string
+	jwtSecret string
 }
 
 type User struct {
