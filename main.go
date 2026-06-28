@@ -48,6 +48,8 @@ func main() {
 	serveMux.HandleFunc("GET /api/chirps", apiConfig_1.getAllChirps)
 	serveMux.HandleFunc("GET /api/chirps/{chirpID}", apiConfig_1.getChirp)
 	serveMux.HandleFunc("POST /api/login", apiConfig_1.login)
+	serveMux.HandleFunc("POST /api/refresh", apiConfig_1.refresh)
+	serveMux.HandleFunc("POST /api/revoke", apiConfig_1.revoke)
 
 	server := &http.Server {
 		Handler: serveMux,
@@ -57,11 +59,110 @@ func main() {
 	server.ListenAndServe()
 }
 
+
+func (cfg *apiConfig) revoke(w http.ResponseWriter, r*http.Request) {
+	headers := r.Header
+	tokenString, err := auth.GetBearerToken(headers)
+	if (err != nil) {
+		log.Printf("Error creating token string")
+		w.WriteHeader(500)
+		return
+	}
+
+	// Revoke refresh token
+	cfg.db.RevokeRefreshToken(r.Context(), tokenString)
+
+	type res struct {
+		Token string `json: "token"`
+	}
+
+	response := res {
+		Token: tokenString,
+	}
+	
+	responseJSON, err := json.Marshal(response)
+	if (err != nil) {
+		log.Printf("Error marshaling json")
+		w.WriteHeader(500)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusNoContent)
+	w.Write(responseJSON)
+
+}
+
+
+func (cfg *apiConfig) refresh(w http.ResponseWriter, r *http.Request) {
+	headers := r.Header
+	tokenString, err := auth.GetBearerToken(headers)
+	if (err != nil) {
+		log.Printf("Error creating token string")
+		w.WriteHeader(500)
+		return
+	}
+
+	refreshToken, err := cfg.db.GetRefreshToken(r.Context(), tokenString)
+	if (err != nil) {
+		log.Printf("Error fetching refresh token: %v", err)
+		w.WriteHeader(401)
+		return
+	}
+
+	if (refreshToken.RevokedAt.Valid) {
+		log.Printf("Refresh token has been revoked: %v", err)
+		w.WriteHeader(401)
+		return
+	}
+
+	if (time.Now().After(refreshToken.ExpiresAt)) {
+		log.Printf("Refresh token has expired: %v", err)
+		w.WriteHeader(401)
+		return
+	}
+
+	// Find user in database
+	user, err := cfg.db.GetUserFromRefreshToken(r.Context(), refreshToken.Token)
+	if (err != nil) {
+		log.Printf("Error fetching user")
+		w.WriteHeader(500)
+		return
+	}
+
+	// Generate access token from userId
+	accessToken, err := auth.MakeJWT(user.ID, cfg.jwtSecret, time.Duration(3600) * time.Second)
+	if (err != nil) {
+		log.Printf("Error creating JWT token")
+		w.WriteHeader(500)
+		return
+	}
+
+	type res struct {
+		Token string `json:"token"`
+	}
+
+	response := res {
+		Token: accessToken,
+	}
+	
+	responseJSON, err := json.Marshal(response)
+	if (err != nil) {
+		log.Printf("Error marshaling json")
+		w.WriteHeader(500)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write(responseJSON)
+
+}
+
 func (cfg *apiConfig) login(w http.ResponseWriter, r *http.Request) {
 	type parameters struct {
 		Email string `json:"email"`
 		Password string `json:"password"`
-		ExpiresInSeconds int `json:"expires_in_seconds"`
 	}
 
 	// Decode request body
@@ -80,7 +181,7 @@ func (cfg *apiConfig) login(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)	// (401)
 		return
 	}
-	
+
 	pwMatch, err := auth.CheckPasswordHash(params.Password, userInfo.HashedPassword)
 	if (err != nil) {
 		log.Printf("Error: comparing passwords %v", err)
@@ -93,23 +194,32 @@ func (cfg *apiConfig) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// If expires_in_seconds not providers or greater than one hour, set to one hour
-	if (params.ExpiresInSeconds <= 0 || params.ExpiresInSeconds > 3600) {
-		params.ExpiresInSeconds = 3600
-	}
-
 	type res struct{
 		ID uuid.UUID `json:"id"`
 		CreatedAt time.Time `json:"created_at"`
 		UpdatedAt time.Time `json:"updated_at"`
 		Email     string    `json:"email"`
 		Token string `json:"token"`
+		RefreshToken string `json:"refresh_token"`
 	}
 
-	token, err := auth.MakeJWT(userInfo.ID, cfg.jwtSecret, time.Duration(params.ExpiresInSeconds) * time.Second)
+	// Create an access token that expires in 1 hour
+	accessToken, err := auth.MakeJWT(userInfo.ID, cfg.jwtSecret, time.Duration(3600) * time.Second)
 	if (err != nil) {
 		log.Printf("Error creating JWT token")
 		w.WriteHeader(500)
+	}
+
+	// Create a refresh token that expires in 60 days
+	rTkn := auth.MakeRefreshToken()
+	refreshToken, err := cfg.db.CreateRefreshToken(r.Context(), database.CreateRefreshTokenParams{
+		Token: rTkn,
+		UserID: userInfo.ID,
+	})
+	if (err != nil) {
+		log.Printf("Error creating refresh token")
+		w.WriteHeader(500)
+		return
 	}
 		
 	response := res{
@@ -117,7 +227,8 @@ func (cfg *apiConfig) login(w http.ResponseWriter, r *http.Request) {
 		CreatedAt: userInfo.CreatedAt,
 		UpdatedAt: userInfo.UpdatedAt,
 		Email: userInfo.Email,
-		Token: token,
+		Token: accessToken,
+		RefreshToken: refreshToken.Token,
 	}
 
 	responseJSON, err := json.Marshal(response)

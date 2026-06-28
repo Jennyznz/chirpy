@@ -8,7 +8,17 @@ import (
 	"net/http"
 	"strings"
 	"errors"
+	"crypto/rand"
+	"encoding/hex"
 )
+
+func MakeRefreshToken() string {
+	data := make([]byte, 32)
+	// Generate 32 bytes of random data
+	rand.Read(data)
+	// Convert random data into a hex string
+	return hex.EncodeToString(data)
+}
 
 func HashPassword(password string) (string, error) {
 	return argon2id.CreateHash(password, argon2id.DefaultParams)
