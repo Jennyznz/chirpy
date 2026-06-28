@@ -50,6 +50,8 @@ func main() {
 	serveMux.HandleFunc("POST /api/login", apiConfig_1.login)
 	serveMux.HandleFunc("POST /api/refresh", apiConfig_1.refresh)
 	serveMux.HandleFunc("POST /api/revoke", apiConfig_1.revoke)
+	serveMux.HandleFunc("PUT /api/users", apiConfig_1.updateUser)
+	serveMux.HandleFunc("DELETE /api/chirps/{chirpID}", apiConfig_1.deleteChirp)
 
 	server := &http.Server {
 		Handler: serveMux,
@@ -59,8 +61,136 @@ func main() {
 	server.ListenAndServe()
 }
 
+func (cfg *apiConfig) deleteChirp(w http.ResponseWriter, r *http.Request) {
+	// Get chirp ID
+	chirpIDString := r.PathValue("chirpID")
+	chirpID, err := uuid.Parse(chirpIDString)
+	if (err != nil) {
+		log.Printf("Invalid chirp id path: %v", err)
+		w.WriteHeader(http.StatusBadRequest)	// (400) Client provided an invalid UUID string
+		return
+	}
 
-func (cfg *apiConfig) revoke(w http.ResponseWriter, r*http.Request) {
+	// Get user ID
+	headers := r.Header
+	accessToken, err := auth.GetBearerToken(headers)
+	if (err != nil) {
+		log.Printf("Error getting bearer token: %s", err)
+		w.WriteHeader(http.StatusUnauthorized) // 401
+		return
+	}
+	userId, err := auth.ValidateJWT(accessToken, cfg.jwtSecret)
+	if (err != nil) {
+		log.Printf("Invalid token: %s", err)
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+
+	// Check if user ID matches the one attached to the chirp
+	chirp, err := cfg.db.GetChirp(r.Context(), chirpID)
+	if (err != nil) {
+		log.Printf("Chirp not found: %s", err)
+		w.WriteHeader(404)
+		return
+	}
+	
+	// Delete chirp if user ids match
+	if chirp.UserID == userId {
+		err := cfg.db.DeleteChirp(r.Context(), chirpID)
+		if (err != nil) {
+			log.Printf("Error deleting chirp: %s", err)
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent) // 204
+		return
+	} else {
+		log.Printf("User not authorized to delete chirp: %s", err)
+		w.WriteHeader(http.StatusForbidden) // 403
+		return	
+	}
+}
+
+
+func (cfg *apiConfig) updateUser(w http.ResponseWriter, r *http.Request) {
+	type parameters struct {
+		Password string `json:"password"`
+		Email string `json:"email"`
+	}
+
+	// Decode request body
+	decoder := json.NewDecoder(r.Body)
+	params := parameters{}
+	err := decoder.Decode(&params)
+	if (err != nil) {
+		log.Printf("Invalid request body: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	// Hash (possibly new) password
+	pw := params.Password
+	hashedPw, err := auth.HashPassword(pw)
+	if (err != nil) {
+		log.Printf("Error hashing password: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	// Find user's id
+	headers := r.Header
+	accessToken, err := auth.GetBearerToken(headers)
+	if (err != nil) {
+		log.Printf("Error getting bearer token: %s", err)
+		w.WriteHeader(401)
+		return
+	}
+	userId, err := auth.ValidateJWT(accessToken, cfg.jwtSecret)
+	if (err != nil) {
+		log.Printf("Invalid token: %s", err)
+		w.WriteHeader(401)
+		return
+	}
+
+	// Update user's information
+	userInfo, err := cfg.db.UpdateEmailAndPassword(r.Context(), database.UpdateEmailAndPasswordParams{
+		ID: userId, 
+		Email: params.Email,
+		HashedPassword: hashedPw,
+	})
+	if (err != nil) {
+		log.Printf("Error updating email and password: %s", err)
+		w.WriteHeader(401)
+		return
+	}
+
+	type response struct{
+		ID uuid.UUID `json:"id"`
+		CreatedAt time.Time `json:"created_at"`
+		UpdatedAt time.Time `json:"updated_at"`
+		Email     string    `json:"email"`
+	}
+
+	res := response{
+		ID: userInfo.ID,
+		CreatedAt: userInfo.CreatedAt,
+		UpdatedAt: userInfo.UpdatedAt,
+		Email: userInfo.Email,
+	}
+
+	responseJSON, err := json.Marshal(res)
+	if (err != nil) {
+		log.Printf("Error marshaling JSON: %s", err)
+		w.WriteHeader(401)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write(responseJSON)
+}
+
+func (cfg *apiConfig) revoke(w http.ResponseWriter, r *http.Request) {
 	headers := r.Header
 	tokenString, err := auth.GetBearerToken(headers)
 	if (err != nil) {
@@ -73,7 +203,7 @@ func (cfg *apiConfig) revoke(w http.ResponseWriter, r*http.Request) {
 	cfg.db.RevokeRefreshToken(r.Context(), tokenString)
 
 	type res struct {
-		Token string `json: "token"`
+		Token string `json:"token"`
 	}
 
 	response := res {
