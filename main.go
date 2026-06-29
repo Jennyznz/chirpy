@@ -37,6 +37,7 @@ func main() {
 		db: dbQueries,
 		platform: platform,
 		jwtSecret: os.Getenv("JWT_SECRET"),
+		apiKey: os.Getenv("POLKA_KEY"),
 	}
 	
 	serveMux.Handle("/app/", apiConfig_1.middlewareMetricsInc(strippedHandler))
@@ -63,6 +64,21 @@ func main() {
 }
 
 func (cfg *apiConfig) upgradeUser(w http.ResponseWriter, r *http.Request) {
+	headers := r.Header
+
+	apiKey, err := auth.GetAPIKey(headers)
+	if err != nil {
+		log.Printf("Unable to fetch api key. Header is missing or malformed: %s", err)
+		w.WriteHeader(401)
+		return
+	}
+
+	if apiKey != cfg.apiKey {
+		log.Printf("Invalid api key: %s", err)
+		w.WriteHeader(401)
+		return
+	}
+
 	type parameters struct {
 		Event string `json:"event"`
 		Data struct {
@@ -72,8 +88,8 @@ func (cfg *apiConfig) upgradeUser(w http.ResponseWriter, r *http.Request) {
 
 	decoder := json.NewDecoder(r.Body)
 	params := parameters{}
-	err := decoder.Decode(&params)
-	if (err != nil) {
+	err = decoder.Decode(&params)
+	if err != nil {
 		log.Printf("Invalid request body: %s", err)
 		w.WriteHeader(500)
 		return
@@ -764,6 +780,7 @@ type apiConfig struct {
 	db *database.Queries
 	platform string
 	jwtSecret string
+	apiKey string
 }
 
 type User struct {
