@@ -52,6 +52,7 @@ func main() {
 	serveMux.HandleFunc("POST /api/revoke", apiConfig_1.revoke)
 	serveMux.HandleFunc("PUT /api/users", apiConfig_1.updateUser)
 	serveMux.HandleFunc("DELETE /api/chirps/{chirpID}", apiConfig_1.deleteChirp)
+	serveMux.HandleFunc("POST /api/polka/webhooks", apiConfig_1.upgradeUser)
 
 	server := &http.Server {
 		Handler: serveMux,
@@ -59,6 +60,40 @@ func main() {
 	}
 
 	server.ListenAndServe()
+}
+
+func (cfg *apiConfig) upgradeUser(w http.ResponseWriter, r *http.Request) {
+	type parameters struct {
+		Event string `json:"event"`
+		Data struct {
+			UserID uuid.UUID `json:"user_id"`
+		}
+	}
+
+	decoder := json.NewDecoder(r.Body)
+	params := parameters{}
+	err := decoder.Decode(&params)
+	if (err != nil) {
+		log.Printf("Invalid request body: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	if params.Event != "user.upgraded" {
+		log.Printf("Invalid event. Must be 'user.upgraded'")
+		w.WriteHeader(204)
+		return
+	} else {
+		err := cfg.db.UpgradeUser(r.Context(), params.Data.UserID)
+		if err != nil {
+			log.Printf("User ID not found, %s", err)
+			w.WriteHeader(404)
+			return
+		}
+
+		w.WriteHeader(204)
+		return
+	}
 }
 
 func (cfg *apiConfig) deleteChirp(w http.ResponseWriter, r *http.Request) {
@@ -169,6 +204,7 @@ func (cfg *apiConfig) updateUser(w http.ResponseWriter, r *http.Request) {
 		CreatedAt time.Time `json:"created_at"`
 		UpdatedAt time.Time `json:"updated_at"`
 		Email     string    `json:"email"`
+		IsChirpyRed bool `json:"is_chirpy_red"`
 	}
 
 	res := response{
@@ -176,6 +212,7 @@ func (cfg *apiConfig) updateUser(w http.ResponseWriter, r *http.Request) {
 		CreatedAt: userInfo.CreatedAt,
 		UpdatedAt: userInfo.UpdatedAt,
 		Email: userInfo.Email,
+		IsChirpyRed: userInfo.IsChirpyRed,
 	}
 
 	responseJSON, err := json.Marshal(res)
@@ -329,6 +366,7 @@ func (cfg *apiConfig) login(w http.ResponseWriter, r *http.Request) {
 		CreatedAt time.Time `json:"created_at"`
 		UpdatedAt time.Time `json:"updated_at"`
 		Email     string    `json:"email"`
+		IsChirpyRed bool `json:"is_chirpy_red"`
 		Token string `json:"token"`
 		RefreshToken string `json:"refresh_token"`
 	}
@@ -357,6 +395,7 @@ func (cfg *apiConfig) login(w http.ResponseWriter, r *http.Request) {
 		CreatedAt: userInfo.CreatedAt,
 		UpdatedAt: userInfo.UpdatedAt,
 		Email: userInfo.Email,
+		IsChirpyRed: userInfo.IsChirpyRed,
 		Token: accessToken,
 		RefreshToken: refreshToken.Token,
 	}
@@ -666,6 +705,7 @@ func (cfg *apiConfig) createUser(w http.ResponseWriter, r *http.Request) {
 		CreatedAt: newUser.CreatedAt,
 		UpdatedAt: newUser.UpdatedAt,
 		Email: newUser.Email,
+		IsChirpyRed: newUser.IsChirpyRed,
 	}
 
 	// Encode user information as JSON in response
@@ -731,6 +771,7 @@ type User struct {
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 	Email     string    `json:"email"`
+	IsChirpyRed bool `json:"is_chirpy_red"`
 	HashedPassword string `json: "password"`
 }
 
